@@ -3,6 +3,7 @@ auphanim
 
 # Config (may contain secrets)
 auphanim.json
+!demo/auphanim.json
 
 # Test cache and coverage
 *.test

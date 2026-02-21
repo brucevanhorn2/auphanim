@@ -1,0 +1,30 @@
+{
+  "watchers": [
+    {
+      "name": "Demo DB",
+      "type": "postgres",
+      "dsn": "postgres://demo:demo@localhost:5432/demo",
+      "tables": ["users", "orders"],
+      "poll_interval_s": 2,
+      "mode": "lightweight",
+      "max_events": 50
+    },
+    {
+      "name": "Events",
+      "type": "kafka",
+      "brokers": ["localhost:9092"],
+      "topics": ["demo.events"],
+      "group_id": "auphanim-demo",
+      "offset": "latest",
+      "max_events": 50
+    },
+    {
+      "name": "Receipts",
+      "type": "filesystem",
+      "path": "/tmp/auphanim-demo",
+      "recursive": false,
+      "patterns": ["*.json"],
+      "max_events": 50
+    }
+  ]
+}
