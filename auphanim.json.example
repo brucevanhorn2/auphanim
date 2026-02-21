@@ -1,0 +1,30 @@
+{
+  "watchers": [
+    {
+      "name": "Main DB",
+      "type": "postgres",
+      "dsn": "postgresql://${DB_USER}:${DB_PASSWORD}@localhost:5432/mydb",
+      "tables": ["users", "orders"],
+      "poll_interval_s": 3,
+      "mode": "lightweight",
+      "max_events": 100
+    },
+    {
+      "name": "Events",
+      "type": "kafka",
+      "brokers": ["${KAFKA_BROKERS}"],
+      "topics": ["order.created"],
+      "group_id": "auphanim-dev",
+      "offset": "latest",
+      "max_events": 100
+    },
+    {
+      "name": "Uploads",
+      "type": "filesystem",
+      "path": "${UPLOAD_DIR}",
+      "recursive": true,
+      "patterns": ["*.pdf", "*.jpg"],
+      "max_events": 100
+    }
+  ]
+}

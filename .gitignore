@@ -1,0 +1,21 @@
+# Build output
+auphanim
+
+# Config (may contain secrets)
+auphanim.json
+
+# Test cache and coverage
+*.test
+*.out
+coverage.html
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
