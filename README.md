@@ -64,7 +64,7 @@ When testing a feature end-to-end you constantly context-switch between terminal
 
 ```bash
 # Clone and build
-git clone https://github.com/yourorg/auphanim
+git clone https://github.com/brucevanhorn2/auphanim
 cd auphanim
 go build -o auphanim .
 
@@ -344,7 +344,7 @@ $EDITOR auphanim.json
 ### Development setup
 
 ```bash
-git clone https://github.com/yourorg/auphanim
+git clone https://github.com/brucevanhorn2/auphanim
 cd auphanim
 go mod download
 
