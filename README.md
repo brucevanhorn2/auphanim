@@ -60,6 +60,15 @@ When testing a feature end-to-end you constantly context-switch between terminal
 
 ## Installation
 
+### Homebrew (macOS and Linux)
+
+```bash
+brew tap brucevanhorn2/tap
+brew install auphanim
+```
+
+### From source
+
 **Prerequisites:** Go 1.22 or later.
 
 ```bash
@@ -71,6 +80,10 @@ go build -o auphanim .
 # Optional: install to $GOPATH/bin
 go install .
 ```
+
+### Pre-built binaries
+
+Download the latest release for your platform from the [Releases page](https://github.com/brucevanhorn2/auphanim/releases), extract the archive, and place the `auphanim` binary somewhere on your `$PATH`.
 
 The result is a single static binary with no runtime dependencies.
 

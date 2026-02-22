@@ -1,0 +1,61 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: auphanim
+    main: .
+    binary: auphanim
+    env:
+      - CGO_ENABLED=0  # pure Go; no C dependencies
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      # Stamp the git tag into the version variable at link time.
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - auphanim.json.example
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+
+brews:
+  - name: auphanim
+    repository:
+      owner: brucevanhorn2
+      name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/brucevanhorn2/auphanim"
+    description: "TUI developer tool for watching system-wide changes while testing full-stack software"
+    license: "MIT"
+    install: |
+      bin.install "auphanim"
+    test: |
+      system "#{bin}/auphanim", "--version"
