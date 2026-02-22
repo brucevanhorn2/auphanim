@@ -1,6 +1,7 @@
 // gen is a traffic generator for the auphanim demo.
-// It continuously inserts, updates, and deletes rows in PostgreSQL and
-// publishes corresponding events to Kafka so you can watch all three
+// It continuously inserts, updates, and deletes rows in PostgreSQL,
+// publishes corresponding events to Kafka, writes receipt files to disk,
+// and sets/expires/deletes keys in Redis — so you can watch all four
 // watcher types light up in the TUI at the same time.
 //
 // Run from the project root:
@@ -22,6 +23,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	kafkago "github.com/segmentio/kafka-go"
+
+	goredis "github.com/redis/go-redis/v9"
 )
 
 const (
@@ -29,6 +32,7 @@ const (
 	kafkaBroker = "localhost:9092"
 	kafkaTopic  = "demo.events"
 	uploadDir   = "/tmp/auphanim-demo"
+	redisAddr   = "localhost:6379"
 )
 
 func main() {
@@ -60,10 +64,16 @@ func main() {
 		log.Fatalf("mkdir %s: %v", uploadDir, err)
 	}
 
+	// ── Redis ─────────────────────────────────────────────────────────────────
+
+	rc := mustConnectRedis(ctx)
+	defer rc.Close()
+
 	// ── Load existing IDs (so we can resume after a restart) ─────────────────
 
 	users := queryIDs(ctx, conn, "SELECT id FROM users ORDER BY id")
 	orders := queryIDs(ctx, conn, "SELECT id FROM orders ORDER BY id")
+	var redisKeys []string
 
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Println("  auphanim demo traffic generator")
@@ -71,6 +81,7 @@ func main() {
 	fmt.Printf("  postgres  → %s\n", pgDSN)
 	fmt.Printf("  kafka     → %s  topic=%s\n", kafkaBroker, kafkaTopic)
 	fmt.Printf("  files     → %s/*.json\n", uploadDir)
+	fmt.Printf("  redis     → %s\n", redisAddr)
 	fmt.Printf("  existing    %d users, %d orders\n", len(users), len(orders))
 	fmt.Println()
 	fmt.Println("  In another terminal run:")
@@ -86,7 +97,7 @@ func main() {
 			fmt.Println("stopped.")
 			return
 		case <-time.After(time.Duration(800+rand.Intn(1800)) * time.Millisecond):
-			users, orders = tick(ctx, conn, kw, users, orders)
+			users, orders, redisKeys = tick(ctx, conn, kw, rc, users, orders, redisKeys)
 		}
 	}
 }
@@ -128,17 +139,27 @@ type weightedAction struct {
 	avail  func() bool
 }
 
-func tick(ctx context.Context, conn *pgx.Conn, kw *kafkago.Writer, users, orders []int) ([]int, []int) {
+func tick(
+	ctx context.Context,
+	conn *pgx.Conn,
+	kw *kafkago.Writer,
+	rc *goredis.Client,
+	users, orders []int,
+	redisKeys []string,
+) ([]int, []int, []string) {
 	actions := []weightedAction{
 		{"insert_user", 3, func() bool { return true }},
 		{"insert_order", 5, func() bool { return len(users) > 0 }},
 		{"update_order", 6, func() bool { return len(orders) > 0 }},
-		{"delete_user", 1, func() bool { return len(users) > 3 }}, // keep a few users around
+		{"delete_user", 1, func() bool { return len(users) > 3 }},
+		{"redis_set", 4, func() bool { return true }},
+		{"redis_setex", 3, func() bool { return true }},
+		{"redis_del", 2, func() bool { return len(redisKeys) > 2 }},
 	}
 
 	chosen := pickWeighted(actions)
 	if chosen == "" {
-		return users, orders
+		return users, orders, redisKeys
 	}
 
 	switch chosen {
@@ -204,9 +225,33 @@ func tick(ctx context.Context, conn *pgx.Conn, kw *kafkago.Writer, users, orders
 		orders = queryIDs(ctx, conn, "SELECT id FROM orders ORDER BY id")
 		emit(ctx, kw, "user.deleted", map[string]any{"userId": uid})
 		logf("DELETE", "users ", "id=%-4d (orders cascade-deleted)", uid)
+
+	case "redis_set":
+		// Permanent key — stays until explicitly deleted.
+		key := fmt.Sprintf("session:%d", rand.Intn(9000)+1000)
+		val := fmt.Sprintf(`{"userId":%d,"role":"user"}`, rand.Intn(100))
+		rc.Set(ctx, key, val, 0)
+		redisKeys = append(redisKeys, key)
+		logf("SET", "redis ", "key=%s", key)
+
+	case "redis_setex":
+		// Expiring key — simulates a short-lived token or rate-limit counter.
+		key := fmt.Sprintf("token:%d", rand.Intn(9000)+1000)
+		val := fmt.Sprintf("tok_%d", rand.Intn(100000))
+		ttl := time.Duration(10+rand.Intn(20)) * time.Second
+		rc.Set(ctx, key, val, ttl)
+		redisKeys = append(redisKeys, key)
+		logf("SETEX", "redis ", "key=%s ttl=%s", key, ttl)
+
+	case "redis_del":
+		idx := rand.Intn(len(redisKeys))
+		key := redisKeys[idx]
+		rc.Del(ctx, key)
+		redisKeys = append(redisKeys[:idx], redisKeys[idx+1:]...)
+		logf("DEL", "redis ", "key=%s", key)
 	}
 
-	return users, orders
+	return users, orders, redisKeys
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -280,6 +325,24 @@ func mustConnectPG(ctx context.Context) *pgx.Conn {
 		}
 	}
 	log.Fatalf("could not connect to PostgreSQL after 20 attempts: %v", err)
+	return nil
+}
+
+func mustConnectRedis(ctx context.Context) *goredis.Client {
+	client := goredis.NewClient(&goredis.Options{Addr: redisAddr})
+	for attempt := 1; attempt <= 20; attempt++ {
+		if err := client.Ping(ctx).Err(); err == nil {
+			return client
+		} else {
+			fmt.Printf("  waiting for Redis (attempt %d/20): %v\n", attempt, err)
+		}
+		select {
+		case <-ctx.Done():
+			log.Fatalf("context cancelled while waiting for Redis")
+		case <-time.After(2 * time.Second):
+		}
+	}
+	log.Fatalf("could not connect to Redis after 20 attempts")
 	return nil
 }
 

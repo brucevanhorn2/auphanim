@@ -36,3 +36,13 @@ services:
       KAFKA_LOG_RETENTION_HOURS: 1
     ports:
       - "9092:9092"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 15

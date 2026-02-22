@@ -5,7 +5,7 @@ A TUI developer tool for watching system-wide changes while testing full-stack s
 Named after the [Ophanim](https://en.wikipedia.org/wiki/Ophanim), the many-eyed angels of Ezekiel's vision.
 
 ```
-┌─────────────────── AUPHANIM — Watching 3 sources ───────────────────────┐
+┌─────────────────── AUPHANIM — Watching 4 sources ───────────────────────┐
 │                                                                          │
 │ ╭── DB: Main DB ●Connected ──────────────────────────────────────────╮  │
 │ │ 14:23:01  INSERT    users       +1 inserted                        │  │
@@ -19,6 +19,12 @@ Named after the [Ophanim](https://en.wikipedia.org/wiki/Ophanim), the many-eyed 
 │                                                                          │
 │ ╭── FS: Uploads ●Connected ──────────────────────────────────────────╮  │
 │ │ 14:23:01  CREATED   /var/uploads/user42/receipt.pdf                │  │
+│ ╰────────────────────────────────────────────────────────────────────╯  │
+│                                                                          │
+│ ╭── redis: Cache ●Connected ─────────────────────────────────────────╮  │
+│ │ 14:23:02  CREATED   session:4821   type=string  ttl=none           │  │
+│ │ 14:23:04  CREATED   token:7093     type=string  ttl=30s            │  │
+│ │ 14:23:06  REMOVED   session:4821                                   │  │
 │ ╰────────────────────────────────────────────────────────────────────╯  │
 │                                                                          │
 │  TAB/j/k: focus   ENTER: event detail   C: clear   Q: quit              │
@@ -38,6 +44,7 @@ Named after the [Ophanim](https://en.wikipedia.org/wiki/Ophanim), the many-eyed 
   - [PostgreSQL watcher](#postgresql-watcher)
   - [Kafka watcher](#kafka-watcher)
   - [Filesystem watcher](#filesystem-watcher)
+  - [Redis watcher](#redis-watcher)
 - [Key bindings](#key-bindings)
 - [CLI reference](#cli-reference)
 - [Contributing](#contributing)
@@ -308,6 +315,44 @@ Watches a directory for file-system events using [fsnotify](https://github.com/f
 Events reported: `CREATED`, `MODIFIED`, `REMOVED`.
 
 > **Linux note:** fsnotify does not recurse natively on Linux via inotify. When `recursive: true` is set, auphanim walks the directory tree at startup and adds each subdirectory individually.
+
+---
+
+### Redis watcher
+
+**Type string:** `"redis"`
+
+Polls Redis using [`SCAN`](https://redis.io/docs/latest/commands/scan/) — the non-blocking, cursor-based alternative to `KEYS` — and emits events for keys that appear or disappear between polls. The initial scan is **silent**: keys that already exist when auphanim starts are not reported, so a pre-populated instance won't flood the panel.
+
+```json
+{
+  "name": "Cache",
+  "type": "redis",
+  "addr": "${REDIS_ADDR}",
+  "password": "",
+  "db": 0,
+  "pattern": "*",
+  "poll_interval_s": 3,
+  "show_values": true,
+  "max_events": 100
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `addr` | string | **required** | Redis server address, e.g. `"localhost:6379"`. |
+| `password` | string | `""` | Optional AUTH password. |
+| `db` | integer | `0` | Redis database number. |
+| `pattern` | string | `"*"` | SCAN glob pattern. Use a prefix like `"session:*"` to watch only a subset of keys. |
+| `poll_interval_s` | integer | `3` | How often to run a full SCAN cycle, in seconds. |
+| `show_values` | boolean | `false` | When `true`, fetches the value for each new key and includes it in the detail overlay. String values are truncated at 200 characters. Hash, list, set, and sorted set keys show an item count instead. |
+| `max_events` | integer | `100` | Maximum events to keep in the panel ring buffer. |
+
+Events reported: `CREATED` (new key detected), `REMOVED` (key deleted or expired).
+
+> **Why SCAN instead of keyspace notifications?** Keyspace notifications require enabling `notify-keyspace-events` in the Redis config, which is often not possible in managed environments. SCAN works against any Redis instance with zero configuration changes.
+
+> **TTL expiry:** When a key expires between two polls, SCAN simply won't return it — auphanim correctly emits `REMOVED` with no special handling needed.
 
 ---
 
