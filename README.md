@@ -23,6 +23,9 @@ Named after the [Ophanim](https://en.wikipedia.org/wiki/Ophanim), the many-eyed 
   - [System metrics watcher](#system-metrics-watcher)
   - [Log file watcher](#log-file-watcher)
 - [Key bindings](#key-bindings)
+- [Querying events](#querying-events)
+  - [HTTP API](#http-api)
+  - [query subcommand](#query-subcommand)
 - [CLI reference](#cli-reference)
 - [Contributing](#contributing)
   - [Adding a new watcher type](#adding-a-new-watcher-type)
@@ -437,19 +440,125 @@ The detail overlay shows the full structured data for the most recent event, wit
 
 ---
 
+## Querying events
+
+Every event auphanim captures is persisted to a SQLite database (`auphanim.db` in the working directory by default). The database survives restarts — pick up where you left off after a weekend. Use `--db :memory:` for a session-only store that is discarded on exit.
+
+This makes it easy to ask a coding agent (Claude Code, Copilot, etc.) to check what happened during a test run.
+
+---
+
+### HTTP API
+
+While auphanim is running it serves a local REST API on `http://127.0.0.1:7391` (port configurable with `--api-port`, set to `0` to disable). All responses are JSON. The server binds to localhost only.
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/health` | Returns `{"status":"ok"}` |
+| `GET /api/events` | List events, newest first |
+| `GET /api/summary` | Per-panel event and error counts |
+
+**`/api/events` query parameters:**
+
+| Parameter | Example | Description |
+|---|---|---|
+| `panel` | `App+Logs` | Filter by panel name |
+| `type` | `ERROR` | Filter by event type |
+| `since` | `5m`, `1h`, `2h30m` | Only events newer than this duration |
+| `limit` | `20` | Max rows (default 100) |
+
+**Examples:**
+
+```bash
+# Quick overview while auphanim is running:
+curl -s localhost:7391/api/summary | jq .
+
+# Errors in the last 5 minutes:
+curl -s "localhost:7391/api/events?type=ERROR&since=5m" | jq '.events[].summary'
+
+# What did the DB panel see in the last hour?
+curl -s "localhost:7391/api/events?panel=Main+DB&since=1h&limit=20" | jq .
+```
+
+---
+
+### query subcommand
+
+`auphanim query` opens the SQLite database directly — **it works whether auphanim is currently running or not**. SQLite WAL mode allows reads and writes to happen concurrently, so you can query a live database without blocking event ingestion.
+
+```
+auphanim query summary [--since DURATION] [--json]
+auphanim query events  [--panel NAME] [--type TYPE] [--since DURATION] [--limit N] [--json]
+auphanim query errors  [--panel NAME] [--since DURATION] [--limit N] [--json]
+```
+
+**`query summary`** — the fastest way to see if anything went wrong:
+
+```
+$ auphanim query summary --since 1h
+PANEL        EVENTS  ERRORS  LAST ERROR
+App Logs        247       3  db timeout after 30s (3m25s ago)
+Main DB          42       0  —
+Kafka Events     18       0  —
+```
+
+**`query errors`** — list error events, newest first:
+
+```
+$ auphanim query errors --since 10m
+TIME      TYPE    PANEL     SUMMARY
+14:31:08  ERROR   App Logs  app.log: ERROR connection refused
+14:31:01  ERROR   App Logs  app.log: ERROR db timeout after 30s
+```
+
+**`query events`** — full event list with optional filters:
+
+```bash
+auphanim query events --panel "Main DB" --since 30m
+auphanim query events --type INSERT --limit 10
+```
+
+**`--json` flag** — machine-readable output for piping to `jq` or passing to an agent:
+
+```bash
+auphanim query summary --json | jq '.panels[] | select(.errors > 0)'
+auphanim query errors --since 5m --json | jq '.'
+```
+
+**Typical agent workflow:**
+
+> You: "Did any errors occur during that last test?"
+>
+> Claude Code runs: `auphanim query errors --since 5m`
+>
+> Claude Code sees: two ERROR events from App Logs, reports them to you.
+
+---
+
 ## CLI reference
 
 ```
 Usage:
   auphanim [flags]
+  auphanim query (summary|events|errors) [flags]
 
 Flags:
-  -c, --config string   Config file path
-                        (default search: ./auphanim.json, ~/.config/auphanim/config.json)
-      --init            Write auphanim.json.example to the current directory and exit
-  -w, --watch           Reload config automatically when the config file changes on disk
-  -v, --version         Print version and exit
-  -h, --help            Help
+  -c, --config string     Config file path
+                          (default search: ./auphanim.json, ~/.config/auphanim/config.json)
+      --db string         SQLite database file (default "auphanim.db"; use ":memory:" for
+                          in-session-only storage that is discarded on exit)
+      --api-port int      Port for the local HTTP query API (default 7391; 0 = disabled)
+      --init              Write auphanim.json.example to the current directory and exit
+  -w, --watch             Reload config automatically when the config file changes on disk
+  -v, --version           Print version and exit
+  -h, --help              Help
+
+Query subcommand flags:
+      --since duration    Only include events newer than this (e.g. 5m, 1h, 2h30m)
+      --panel string      Filter by panel name
+      --type string       Filter by event type (events subcommand only)
+      --limit int         Maximum rows to return (default 50)
+      --json              Output raw JSON instead of the formatted table
 ```
 
 ### `--init`
@@ -486,7 +595,7 @@ cd auphanim
 go mod download
 
 # Run unit tests (no external services required)
-go test ./internal/config/... ./internal/watcher/filesystem/... ./internal/watcher/logfile/...
+go test ./internal/config/... ./internal/store/... ./internal/api/... ./internal/watcher/filesystem/... ./internal/watcher/logfile/...
 
 # Build
 go build -o auphanim .
