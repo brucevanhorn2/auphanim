@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -24,14 +25,15 @@ type MetricSample struct {
 // PanelModel is the sub-model for a single watcher panel.
 // It holds a ring-buffer of the most recent events.
 type PanelModel struct {
-	watcherName  string
-	watcherType  string
-	maxEvents    int
-	evts         []events.WatchEvent // ring buffer
-	lastEvt      events.WatchEvent   // copy of most recent event
-	hasLast      bool
-	metrics      []MetricSample // history for sparklines (sysmetrics type only)
-	scrollOffset int            // lines scrolled up from the bottom; 0 = follow latest
+	watcherName    string
+	watcherType    string
+	maxEvents      int
+	evts           []events.WatchEvent // ring buffer
+	lastEvt        events.WatchEvent   // copy of most recent event
+	hasLast        bool
+	metrics        []MetricSample // history for sparklines (sysmetrics type only)
+	scrollOffset   int            // lines scrolled up from the bottom; 0 = follow latest
+	lastActivityAt time.Time      // when the most recent event arrived
 }
 
 func newPanelModel(w watcher.Watcher, maxEvents int) *PanelModel {
@@ -54,6 +56,7 @@ func (p *PanelModel) AddEvent(e events.WatchEvent) {
 	p.evts = append(p.evts, e)
 	p.lastEvt = e
 	p.hasLast = true
+	p.lastActivityAt = time.Now()
 
 	// For sysmetrics panels, also maintain the metrics history for sparklines.
 	if e.Type == events.EventMetric {

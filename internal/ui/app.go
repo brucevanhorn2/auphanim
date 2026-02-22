@@ -45,22 +45,31 @@ type exportDoneMsg struct {
 
 type clearFlashMsg struct{}
 
+// tickMsg is sent every second to keep activity indicators current.
+type tickMsg struct{}
+
 // ── AppModel ─────────────────────────────────────────────────────────────────
 
 // AppModel is the root Bubble Tea model. It owns all watcher panels and routes
 // incoming events to the correct panel sub-model.
 type AppModel struct {
-	ctx    context.Context
+	ctx     context.Context
 	cfgFile string
 
-	watchers     []watcher.Watcher
-	panels       map[string]*PanelModel // keyed by watcher.Name()
-	order        []string               // panel display order
-	panelWeights map[string]int         // relative height weight per panel (min 1)
-	width        int
-	height       int
-	focused      int          // index into order of the focused panel
-	detail       *DetailModel // non-nil when the detail overlay is open
+	watchers []watcher.Watcher
+	panels   map[string]*PanelModel // keyed by watcher.Name()
+	order    []string               // panel display order
+
+	width  int
+	height int
+
+	// Layout
+	columns        int // actual columns used (derived from width or override)
+	columnsOverride int // 0 = auto; 1/2/3 = explicit
+	viewportStart  int // index of the first visible panel row
+
+	focused int          // index into order of the focused panel
+	detail  *DetailModel // non-nil when the detail overlay is open
 
 	filterMode bool
 	filterText string
@@ -72,37 +81,131 @@ type AppModel struct {
 func NewAppModel(ctx context.Context, cfgFile string, watchers []watcher.Watcher) AppModel {
 	panels := make(map[string]*PanelModel, len(watchers))
 	order := make([]string, 0, len(watchers))
-	weights := make(map[string]int, len(watchers))
 	for _, w := range watchers {
 		panels[w.Name()] = newPanelModel(w, 100)
 		order = append(order, w.Name())
-		weights[w.Name()] = 1
 	}
 	return AppModel{
-		ctx:          ctx,
-		cfgFile:      cfgFile,
-		watchers:     watchers,
-		panels:       panels,
-		order:        order,
-		panelWeights: weights,
+		ctx:     ctx,
+		cfgFile: cfgFile,
+		watchers: watchers,
+		panels:  panels,
+		order:   order,
+		columns: 1, // updated on first WindowSizeMsg
 	}
+}
+
+// ── Layout helpers ────────────────────────────────────────────────────────────
+
+// autoColumns returns the number of columns that best fit the given terminal width.
+func autoColumns(width int) int {
+	switch {
+	case width >= 240:
+		return 3
+	case width >= 120:
+		return 2
+	default:
+		return 1
+	}
+}
+
+// layout computes how many panel rows are visible, the height per row, and the
+// available body height, given the current model state.
+// "rows" here means rows of panels (each row holds `cols` panels side by side).
+func (m AppModel) layout() (cols, numVisibleRows, rowH, available int) {
+	// Header and footer each occupy 1 rendered line.
+	available = m.height - 2
+	if available < 3 {
+		available = 3
+	}
+
+	cols = m.columns
+	if cols < 1 {
+		cols = 1
+	}
+
+	n := len(m.order)
+	if n == 0 {
+		numVisibleRows = 0
+		rowH = available
+		return
+	}
+
+	totalRows := (n + cols - 1) / cols
+
+	// Minimum row height is 3 (border + title line + at least one event line).
+	numVisibleRows = available / 3
+	if numVisibleRows < 1 {
+		numVisibleRows = 1
+	}
+	if numVisibleRows > totalRows {
+		numVisibleRows = totalRows
+	}
+
+	rowH = available / numVisibleRows
+	if rowH < 3 {
+		rowH = 3
+	}
+	return
+}
+
+// ensureViewportValid adjusts viewportStart so the focused panel is always visible.
+func (m AppModel) ensureViewportValid() AppModel {
+	n := len(m.order)
+	if n == 0 {
+		return m
+	}
+	cols, numVisible, _, _ := m.layout()
+	totalRows := (n + cols - 1) / cols
+
+	focusedRow := m.focused / cols
+
+	// Clamp viewportStart to valid range.
+	maxStart := totalRows - numVisible
+	if maxStart < 0 {
+		maxStart = 0
+	}
+	if m.viewportStart > maxStart {
+		m.viewportStart = maxStart
+	}
+	if m.viewportStart < 0 {
+		m.viewportStart = 0
+	}
+
+	// Scroll viewport to include the focused row.
+	if focusedRow < m.viewportStart {
+		m.viewportStart = focusedRow
+	}
+	if focusedRow >= m.viewportStart+numVisible {
+		m.viewportStart = focusedRow - numVisible + 1
+	}
+	return m
 }
 
 // ── Bubble Tea interface ──────────────────────────────────────────────────────
 
 func (m AppModel) Init() tea.Cmd {
-	cmds := make([]tea.Cmd, len(m.watchers))
+	cmds := make([]tea.Cmd, len(m.watchers)+1)
 	for i, w := range m.watchers {
 		cmds[i] = waitForEvent(w)
 	}
+	cmds[len(m.watchers)] = tickCmd()
 	return tea.Batch(cmds...)
 }
 
 func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 
+	case tickMsg:
+		// Re-issue tick every second to refresh activity indicators.
+		return m, tickCmd()
+
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		if m.columnsOverride == 0 {
+			m.columns = autoColumns(m.width)
+		}
+		m = m.ensureViewportValid()
 		if m.detail != nil {
 			m.detail = newDetailModel(&m.detail.event, m.width, m.height)
 		}
@@ -121,37 +224,27 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Channel closed — no re-subscription needed.
 
 	case ConfigChangedMsg:
-		// Launch async reload; keeps UI responsive while stopping/restarting watchers.
 		return m, reloadConfigCmd(m.cfgFile, m.ctx, m.watchers)
 
 	case configReloadedMsg:
-		// Stop channels that may still be pumping (already stopped in the cmd,
-		// but ensure they are before we rebuild).
 		panels := make(map[string]*PanelModel, len(msg.watchers))
 		order := make([]string, 0, len(msg.watchers))
-		weights := make(map[string]int, len(msg.watchers))
 		for _, w := range msg.watchers {
 			name := w.Name()
-			// Preserve existing panel history where the watcher name is the same.
 			if old, ok := m.panels[name]; ok {
 				panels[name] = old
 			} else {
 				panels[name] = newPanelModel(w, 100)
 			}
 			order = append(order, name)
-			if existing, ok := m.panelWeights[name]; ok {
-				weights[name] = existing
-			} else {
-				weights[name] = 1
-			}
 		}
 		m.watchers = msg.watchers
 		m.panels = panels
 		m.order = order
-		m.panelWeights = weights
 		if m.focused >= len(m.order) {
 			m.focused = len(m.order) - 1
 		}
+		m = m.ensureViewportValid()
 		m.flashMsg = "Config reloaded"
 		cmds := make([]tea.Cmd, len(msg.watchers)+1)
 		for i, w := range msg.watchers {
@@ -217,11 +310,13 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "tab":
 			if len(m.order) > 0 {
 				m.focused = (m.focused + 1) % len(m.order)
+				m = m.ensureViewportValid()
 			}
 
 		case "shift+tab":
 			if len(m.order) > 0 {
 				m.focused = (m.focused - 1 + len(m.order)) % len(m.order)
+				m = m.ensureViewportValid()
 			}
 
 		case "k", "up":
@@ -257,25 +352,30 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "+":
-			if len(m.order) > 0 {
-				name := m.order[m.focused]
-				if m.panelWeights[name] < 10 {
-					m.panelWeights[name]++
-				}
+			// Increase columns (up to 3).
+			next := m.columns + 1
+			if next > 3 {
+				next = 3
 			}
+			m.columnsOverride = next
+			m.columns = next
+			m = m.ensureViewportValid()
 
 		case "-":
-			if len(m.order) > 0 {
-				name := m.order[m.focused]
-				if m.panelWeights[name] > 1 {
-					m.panelWeights[name]--
-				}
+			// Decrease columns (down to 1).
+			next := m.columns - 1
+			if next < 1 {
+				next = 1
 			}
+			m.columnsOverride = next
+			m.columns = next
+			m = m.ensureViewportValid()
 
 		case "=":
-			for name := range m.panelWeights {
-				m.panelWeights[name] = 1
-			}
+			// Reset to auto-detect.
+			m.columnsOverride = 0
+			m.columns = autoColumns(m.width)
+			m = m.ensureViewportValid()
 
 		case "s", "S":
 			return m, exportCmd(m.panels, m.order)
@@ -300,44 +400,65 @@ func (m AppModel) View() string {
 	headerH := lipgloss.Height(header)
 	footerH := lipgloss.Height(footer)
 	available := m.height - headerH - footerH
+	if available < 1 {
+		available = 1
+	}
 
-	if len(m.order) == 0 || available < 1 {
+	if len(m.order) == 0 {
 		return lipgloss.JoinVertical(lipgloss.Left, header, footer)
 	}
 
-	// Compute heights from weights.
-	totalWeight := 0
-	for _, name := range m.order {
-		totalWeight += m.panelWeights[name]
-	}
-	if totalWeight == 0 {
-		totalWeight = len(m.order)
-	}
+	cols, numVisible, rowH, _ := m.layout()
+	n := len(m.order)
 
-	panelViews := make([]string, len(m.order))
-	usedHeight := 0
-	for i, name := range m.order {
-		w := m.watcherByName(name)
-		var st watcher.Status
-		if w != nil {
-			st = w.Status()
+	rowViews := make([]string, numVisible)
+	for r := 0; r < numVisible; r++ {
+		rowIdx := m.viewportStart + r
+
+		// Last visible row absorbs any leftover height from integer division.
+		h := rowH
+		if r == numVisible-1 {
+			h = available - rowH*(numVisible-1)
+			if h < 3 {
+				h = 3
+			}
 		}
 
-		var h int
-		if i == len(m.order)-1 {
-			h = available - usedHeight
+		// Build column views for this row.
+		colViews := make([]string, cols)
+		for c := 0; c < cols; c++ {
+			panelIdx := rowIdx*cols + c
+
+			// Distribute width: last column absorbs rounding remainder.
+			colW := m.width / cols
+			if c == cols-1 {
+				colW = m.width - (m.width/cols)*(cols-1)
+			}
+
+			if panelIdx >= n {
+				// Empty slot — fill with blank space so JoinHorizontal aligns.
+				colViews[c] = lipgloss.NewStyle().
+					Width(colW).Height(h).Render("")
+				continue
+			}
+
+			name := m.order[panelIdx]
+			w := m.watcherByName(name)
+			var st watcher.Status
+			if w != nil {
+				st = w.Status()
+			}
+			colViews[c] = m.panels[name].View(colW, h, panelIdx == m.focused, st, m.filterText)
+		}
+
+		if cols == 1 {
+			rowViews[r] = colViews[0]
 		} else {
-			h = (m.panelWeights[name] * available) / totalWeight
+			rowViews[r] = lipgloss.JoinHorizontal(lipgloss.Top, colViews...)
 		}
-		if h < 3 {
-			h = 3
-		}
-		usedHeight += h
-
-		panelViews[i] = m.panels[name].View(m.width, h, i == m.focused, st, m.filterText)
 	}
 
-	body := strings.Join(panelViews, "")
+	body := strings.Join(rowViews, "")
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 }
 
@@ -353,6 +474,12 @@ func waitForEvent(w watcher.Watcher) tea.Cmd {
 	}
 }
 
+func tickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
+		return tickMsg{}
+	})
+}
+
 func (m AppModel) watcherByName(name string) watcher.Watcher {
 	for _, w := range m.watchers {
 		if w.Name() == name {
@@ -362,13 +489,67 @@ func (m AppModel) watcherByName(name string) watcher.Watcher {
 	return nil
 }
 
+// circledNumber returns the Unicode circled digit for n (1–20), or "[N]" beyond that.
+func circledNumber(n int) string {
+	circled := []rune{
+		'①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩',
+		'⑪', '⑫', '⑬', '⑭', '⑮', '⑯', '⑰', '⑱', '⑲', '⑳',
+	}
+	if n >= 1 && n <= len(circled) {
+		return string(circled[n-1])
+	}
+	return fmt.Sprintf("[%d]", n)
+}
+
 func (m AppModel) headerView() string {
+	// Build activity indicators — one circled number per panel.
+	const activityWindow = 3 * time.Second
+	var sb strings.Builder
+	for i, name := range m.order {
+		p := m.panels[name]
+		num := circledNumber(i + 1)
+
+		var style lipgloss.Style
+		switch {
+		case i == m.focused:
+			// Focused panel: always highlighted in the accent colour.
+			style = lipgloss.NewStyle().Foreground(colorPurple).Bold(true)
+
+		case !p.lastActivityAt.IsZero() && time.Since(p.lastActivityAt) < activityWindow:
+			// Recently active: colour by the type of the last event.
+			if p.hasLast {
+				style = eventTypeStyle(p.lastEvt.Type).Bold(true)
+			} else {
+				style = lipgloss.NewStyle().Foreground(colorCyan).Bold(true)
+			}
+
+		default:
+			style = lipgloss.NewStyle().Foreground(colorGray)
+		}
+		sb.WriteString(style.Render(num))
+	}
+	indicators := sb.String()
+
 	n := len(m.watchers)
 	noun := "source"
 	if n != 1 {
 		noun = "sources"
 	}
-	title := fmt.Sprintf("  AUPHANIM  —  Watching %d %s", n, noun)
+
+	// Viewport position hint when not all panels fit on screen.
+	cols, numVisible, _, _ := m.layout()
+	totalRows := (n + cols - 1) / cols
+	posHint := ""
+	if numVisible < totalRows {
+		firstPanel := m.viewportStart*cols + 1
+		lastPanel := (m.viewportStart+numVisible)*cols
+		if lastPanel > n {
+			lastPanel = n
+		}
+		posHint = fmt.Sprintf("  [%d–%d of %d]", firstPanel, lastPanel, n)
+	}
+
+	title := fmt.Sprintf("  AUPHANIM  %s  —  %d %s%s", indicators, n, noun, posHint)
 	return styleHeader.Width(m.width).Render(title)
 }
 
@@ -380,7 +561,14 @@ func (m AppModel) footerView() string {
 	if m.flashMsg != "" {
 		return styleFooter.Width(m.width).Render("  " + m.flashMsg)
 	}
-	help := "  TAB: panel   j/k: scroll   g: latest   /: filter   s: save   +/-: resize   ENTER: detail   C: clear   Q: quit"
+	colHint := "="
+	if m.columnsOverride > 0 {
+		colHint = fmt.Sprintf("%dcol", m.columns)
+	}
+	help := fmt.Sprintf(
+		"  TAB: panel  j/k: scroll  g: latest  /: filter  s: save  +/-: columns(%s)  ENTER: detail  C: clear  Q: quit",
+		colHint,
+	)
 	return styleFooter.Width(m.width).Render(help)
 }
 
@@ -390,7 +578,6 @@ func reloadConfigCmd(cfgFile string, ctx context.Context, oldWatchers []watcher.
 		for _, w := range oldWatchers {
 			w.Stop()
 		}
-		// Brief pause to let goroutines drain before we start fresh watchers.
 		time.Sleep(150 * time.Millisecond)
 
 		cfg, err := config.Load(cfgFile)
@@ -413,9 +600,8 @@ func reloadConfigCmd(cfgFile string, ctx context.Context, oldWatchers []watcher.
 	}
 }
 
-// exportCmd collects all panel events and writes them to a JSON file.
+// exportCmd collects all panel events and writes them to a timestamped JSON file.
 func exportCmd(panels map[string]*PanelModel, order []string) tea.Cmd {
-	// Snapshot events synchronously before launching goroutine.
 	type panelSnap struct {
 		name  string
 		wtype string
@@ -436,8 +622,8 @@ func exportCmd(panels map[string]*PanelModel, order []string) tea.Cmd {
 			Events      []events.WatchEvent `json:"events"`
 		}
 		type exportData struct {
-			ExportedAt time.Time      `json:"exported_at"`
-			Panels     []exportPanel  `json:"panels"`
+			ExportedAt time.Time     `json:"exported_at"`
+			Panels     []exportPanel `json:"panels"`
 		}
 
 		data := exportData{ExportedAt: time.Now()}
@@ -462,7 +648,7 @@ func exportCmd(panels map[string]*PanelModel, order []string) tea.Cmd {
 	}
 }
 
-// flashClearCmd returns a command that sends clearFlashMsg after d.
+// flashClearCmd returns a command that clears the flash message after d.
 func flashClearCmd(d time.Duration) tea.Cmd {
 	return func() tea.Msg {
 		time.Sleep(d)

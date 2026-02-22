@@ -414,14 +414,20 @@ Summary format: `filename.log: <line content>` — the base filename is prepende
 | `g` | Jump to latest (stop scrolling, follow new events) |
 | `/` | Enter filter mode — type to filter events in all panels |
 | `Esc` | Clear filter (in normal mode); exit filter input (in filter mode) |
-| `+` | Increase height of focused panel |
-| `-` | Decrease height of focused panel |
-| `=` | Reset all panel heights to equal |
+| `+` | Add a column (1 → 2 → 3) |
+| `-` | Remove a column (3 → 2 → 1) |
+| `=` | Reset columns to auto-detect from terminal width |
 | `Enter` | Open detail overlay for the last event in the focused panel |
 | `Esc` / `q` / `Enter` | Close the detail overlay |
 | `s` / `S` | Save all current events to `auphanim_export_<timestamp>.json` |
 | `c` / `C` | Clear all event buffers |
 | `q` / `Ctrl+C` | Quit |
+
+**Activity indicators:** The header shows a numbered circle (①②③…) for each configured panel. Circles are dim gray when idle. When a panel receives an event, its circle lights up in the event's colour (green for creates, yellow for updates, red for errors, cyan for messages) for 3 seconds. The focused panel's circle is always purple.
+
+**Viewport:** When more panels are configured than fit vertically, only a subset is shown. Tab scrolls the viewport to keep the focused panel visible. The header shows `[1–4 of 8]` when some panels are off-screen.
+
+**Column layout:** Auphanim auto-detects the number of columns from the terminal width (1 col < 120 chars, 2 cols ≥ 120, 3 cols ≥ 240). Use `+`/`-` to override. `=` returns to auto. The footer shows the current column count or `=` when auto-detect is active.
 
 **Filter mode:** Press `/` to start filtering. The footer shows `Filter: <text>▎`. Events across all panels are filtered to lines whose summary contains the text (case-insensitive). Press `Enter` to confirm or `Esc` to clear and exit. The panel title shows `[matching/total]` when a filter is active.
 
