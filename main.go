@@ -19,6 +19,7 @@ import (
 	_ "auphanim/internal/watcher/filesystem"
 	_ "auphanim/internal/watcher/kafka"
 	_ "auphanim/internal/watcher/postgres"
+	_ "auphanim/internal/watcher/redis"
 	_ "auphanim/internal/watcher/sysmetrics"
 )
 
@@ -141,6 +142,17 @@ const exampleConfig = `{
       "path": "${UPLOAD_DIR}",
       "recursive": true,
       "patterns": ["*.pdf", "*.jpg"],
+      "max_events": 100
+    },
+    {
+      "name": "Cache",
+      "type": "redis",
+      "addr": "${REDIS_ADDR}",
+      "password": "",
+      "db": 0,
+      "pattern": "*",
+      "poll_interval_s": 3,
+      "show_values": true,
       "max_events": 100
     }
   ]

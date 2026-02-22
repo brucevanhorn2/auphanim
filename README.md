@@ -19,6 +19,7 @@ Named after the [Ophanim](https://en.wikipedia.org/wiki/Ophanim), the many-eyed 
   - [PostgreSQL watcher](#postgresql-watcher)
   - [Kafka watcher](#kafka-watcher)
   - [Filesystem watcher](#filesystem-watcher)
+  - [Redis watcher](#redis-watcher)
   - [System metrics watcher](#system-metrics-watcher)
 - [Key bindings](#key-bindings)
 - [CLI reference](#cli-reference)
@@ -293,6 +294,44 @@ Events reported: `CREATED`, `MODIFIED`, `REMOVED`.
 
 ---
 
+### Redis watcher
+
+**Type string:** `"redis"`
+
+Polls Redis using [`SCAN`](https://redis.io/docs/latest/commands/scan/) — the non-blocking, cursor-based alternative to `KEYS` — and emits events for keys that appear or disappear between polls. The initial scan is **silent**: keys that already exist when auphanim starts are not reported, so a pre-populated instance won't flood the panel.
+
+```json
+{
+  "name": "Cache",
+  "type": "redis",
+  "addr": "${REDIS_ADDR}",
+  "password": "",
+  "db": 0,
+  "pattern": "*",
+  "poll_interval_s": 3,
+  "show_values": true,
+  "max_events": 100
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `addr` | string | **required** | Redis server address, e.g. `"localhost:6379"`. |
+| `password` | string | `""` | Optional AUTH password. |
+| `db` | integer | `0` | Redis database number. |
+| `pattern` | string | `"*"` | SCAN glob pattern. Use a prefix like `"session:*"` to watch only a subset of keys. |
+| `poll_interval_s` | integer | `3` | How often to run a full SCAN cycle, in seconds. |
+| `show_values` | boolean | `false` | When `true`, fetches the value for each new key and includes it in the detail overlay. String values are truncated at 200 characters. Hash, list, set, and sorted set keys show an item count instead. |
+| `max_events` | integer | `100` | Maximum events to keep in the panel ring buffer. |
+
+Events reported: `CREATED` (new key detected), `REMOVED` (key deleted or expired).
+
+> **Why SCAN instead of keyspace notifications?** Keyspace notifications require enabling `notify-keyspace-events` in the Redis config, which is often not possible in managed environments. SCAN works against any Redis instance with zero configuration changes.
+
+> **TTL expiry:** When a key expires between two polls, SCAN simply won't return it — auphanim correctly emits `REMOVED` with no special handling needed.
+
+---
+
 ### System metrics watcher
 
 **Type string:** `"sysmetrics"`
@@ -331,6 +370,7 @@ Pressing `Enter` on a focused sysmetrics panel opens the standard detail overlay
 No external services or configuration beyond `poll_interval_s` are required. The watcher works on Linux and macOS.
 
 ---
+
 
 ## Key bindings
 

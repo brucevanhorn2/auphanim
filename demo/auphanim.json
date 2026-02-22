@@ -31,6 +31,17 @@
       "recursive": false,
       "patterns": ["*.json"],
       "max_events": 50
+    },
+    {
+      "name": "Cache",
+      "type": "redis",
+      "addr": "localhost:6379",
+      "password": "",
+      "db": 0,
+      "pattern": "*",
+      "poll_interval_s": 2,
+      "show_values": true,
+      "max_events": 50
     }
   ]
 }
