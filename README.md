@@ -21,7 +21,11 @@ Named after the [Ophanim](https://en.wikipedia.org/wiki/Ophanim), the many-eyed 
   - [Filesystem watcher](#filesystem-watcher)
   - [Redis watcher](#redis-watcher)
   - [System metrics watcher](#system-metrics-watcher)
+  - [Log file watcher](#log-file-watcher)
 - [Key bindings](#key-bindings)
+- [Querying events](#querying-events)
+  - [HTTP API](#http-api)
+  - [query subcommand](#query-subcommand)
 - [CLI reference](#cli-reference)
 - [Contributing](#contributing)
   - [Adding a new watcher type](#adding-a-new-watcher-type)
@@ -371,19 +375,163 @@ No external services or configuration beyond `poll_interval_s` are required. The
 
 ---
 
+### Log file watcher
+
+**Type string:** `"logfile"`
+
+Tails one or more log files and emits one event per new line — like `tail -f` but integrated into the auphanim panel. Uses [fsnotify](https://github.com/fsnotify/fsnotify) to detect writes without polling. Handles log rotation by comparing inodes, and detects truncation (e.g. `logrotate` with `copytruncate`).
+
+**Silent start:** Lines present in the file before auphanim starts are not emitted. Only new lines written after startup appear.
+
+```json
+{
+  "name": "App Logs",
+  "type": "logfile",
+  "paths": ["${LOG_PATH}", "/var/log/nginx/error.log"],
+  "patterns": ["WARN", "ERROR"],
+  "error_patterns": ["ERROR", "FATAL", "PANIC", "EXCEPTION"],
+  "max_events": 200
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `paths` | array of strings | **required** | One or more log files to tail. Each file is watched independently. |
+| `patterns` | array of strings | `[]` (all lines) | If non-empty, only lines containing at least one of these substrings (case-insensitive) are emitted. |
+| `error_patterns` | array of strings | `["ERROR","FATAL","PANIC","EXCEPTION","panic:"]` | Lines matching any of these substrings are classified as `EventError` (shown in red) rather than `EventMessage`. |
+| `max_events` | integer | `100` | Maximum events to keep in the panel ring buffer. |
+
+Events reported: `MESSAGE` (normal line), `ERROR` (line matches an error pattern).
+
+Summary format: `filename.log: <line content>` — the base filename is prepended so you can tell which file a line came from when watching multiple files.
+
+---
 
 ## Key bindings
 
 | Key | Action |
 |---|---|
-| `Tab` / `j` / `↓` | Move focus to the next panel |
-| `Shift+Tab` / `k` / `↑` | Move focus to the previous panel |
+| `Tab` / `Shift+Tab` | Move focus to the next / previous panel |
+| `j` / `↓` | Scroll focused panel toward newer events |
+| `k` / `↑` | Scroll focused panel toward older events |
+| `g` | Jump to latest (stop scrolling, follow new events) |
+| `/` | Enter filter mode — type to filter events in all panels |
+| `Esc` | Clear filter (in normal mode); exit filter input (in filter mode) |
+| `+` | Add a column (1 → 2 → 3) |
+| `-` | Remove a column (3 → 2 → 1) |
+| `=` | Reset columns to auto-detect from terminal width |
 | `Enter` | Open detail overlay for the last event in the focused panel |
 | `Esc` / `q` / `Enter` | Close the detail overlay |
+| `s` / `S` | Save all current events to `auphanim_export_<timestamp>.json` |
 | `c` / `C` | Clear all event buffers |
 | `q` / `Ctrl+C` | Quit |
 
+**Activity indicators:** The header shows a numbered circle (①②③…) for each configured panel. Circles are dim gray when idle. When a panel receives an event, its circle lights up in the event's colour (green for creates, yellow for updates, red for errors, cyan for messages) for 3 seconds. The focused panel's circle is always purple.
+
+**Viewport:** When more panels are configured than fit vertically, only a subset is shown. Tab scrolls the viewport to keep the focused panel visible. The header shows `[1–4 of 8]` when some panels are off-screen.
+
+**Column layout:** Auphanim auto-detects the number of columns from the terminal width (1 col < 120 chars, 2 cols ≥ 120, 3 cols ≥ 240). Use `+`/`-` to override. `=` returns to auto. The footer shows the current column count or `=` when auto-detect is active.
+
+**Filter mode:** Press `/` to start filtering. The footer shows `Filter: <text>▎`. Events across all panels are filtered to lines whose summary contains the text (case-insensitive). Press `Enter` to confirm or `Esc` to clear and exit. The panel title shows `[matching/total]` when a filter is active.
+
+**Scroll indicator:** When a panel is scrolled up (not following latest), its title shows `↑N` where N is how many lines back from the most recent event.
+
 The detail overlay shows the full structured data for the most recent event, with syntax-highlighted JSON.
+
+---
+
+## Querying events
+
+Every event auphanim captures is persisted to a SQLite database (`auphanim.db` in the working directory by default). The database survives restarts — pick up where you left off after a weekend. Use `--db :memory:` for a session-only store that is discarded on exit.
+
+This makes it easy to ask a coding agent (Claude Code, Copilot, etc.) to check what happened during a test run.
+
+---
+
+### HTTP API
+
+While auphanim is running it serves a local REST API on `http://127.0.0.1:7391` (port configurable with `--api-port`, set to `0` to disable). All responses are JSON. The server binds to localhost only.
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/health` | Returns `{"status":"ok"}` |
+| `GET /api/events` | List events, newest first |
+| `GET /api/summary` | Per-panel event and error counts |
+
+**`/api/events` query parameters:**
+
+| Parameter | Example | Description |
+|---|---|---|
+| `panel` | `App+Logs` | Filter by panel name |
+| `type` | `ERROR` | Filter by event type |
+| `since` | `5m`, `1h`, `2h30m` | Only events newer than this duration |
+| `limit` | `20` | Max rows (default 100) |
+
+**Examples:**
+
+```bash
+# Quick overview while auphanim is running:
+curl -s localhost:7391/api/summary | jq .
+
+# Errors in the last 5 minutes:
+curl -s "localhost:7391/api/events?type=ERROR&since=5m" | jq '.events[].summary'
+
+# What did the DB panel see in the last hour?
+curl -s "localhost:7391/api/events?panel=Main+DB&since=1h&limit=20" | jq .
+```
+
+---
+
+### query subcommand
+
+`auphanim query` opens the SQLite database directly — **it works whether auphanim is currently running or not**. SQLite WAL mode allows reads and writes to happen concurrently, so you can query a live database without blocking event ingestion.
+
+```
+auphanim query summary [--since DURATION] [--json]
+auphanim query events  [--panel NAME] [--type TYPE] [--since DURATION] [--limit N] [--json]
+auphanim query errors  [--panel NAME] [--since DURATION] [--limit N] [--json]
+```
+
+**`query summary`** — the fastest way to see if anything went wrong:
+
+```
+$ auphanim query summary --since 1h
+PANEL        EVENTS  ERRORS  LAST ERROR
+App Logs        247       3  db timeout after 30s (3m25s ago)
+Main DB          42       0  —
+Kafka Events     18       0  —
+```
+
+**`query errors`** — list error events, newest first:
+
+```
+$ auphanim query errors --since 10m
+TIME      TYPE    PANEL     SUMMARY
+14:31:08  ERROR   App Logs  app.log: ERROR connection refused
+14:31:01  ERROR   App Logs  app.log: ERROR db timeout after 30s
+```
+
+**`query events`** — full event list with optional filters:
+
+```bash
+auphanim query events --panel "Main DB" --since 30m
+auphanim query events --type INSERT --limit 10
+```
+
+**`--json` flag** — machine-readable output for piping to `jq` or passing to an agent:
+
+```bash
+auphanim query summary --json | jq '.panels[] | select(.errors > 0)'
+auphanim query errors --since 5m --json | jq '.'
+```
+
+**Typical agent workflow:**
+
+> You: "Did any errors occur during that last test?"
+>
+> Claude Code runs: `auphanim query errors --since 5m`
+>
+> Claude Code sees: two ERROR events from App Logs, reports them to you.
 
 ---
 
@@ -392,24 +540,48 @@ The detail overlay shows the full structured data for the most recent event, wit
 ```
 Usage:
   auphanim [flags]
+  auphanim query (summary|events|errors) [flags]
 
 Flags:
-  -c, --config string   Config file path
-                        (default search: ./auphanim.json, ~/.config/auphanim/config.json)
-      --init            Write auphanim.json.example to the current directory and exit
-  -v, --version         Print version and exit
-  -h, --help            Help
+  -c, --config string     Config file path
+                          (default search: ./auphanim.json, ~/.config/auphanim/config.json)
+      --db string         SQLite database file (default "auphanim.db"; use ":memory:" for
+                          in-session-only storage that is discarded on exit)
+      --api-port int      Port for the local HTTP query API (default 7391; 0 = disabled)
+      --init              Write auphanim.json.example to the current directory and exit
+  -w, --watch             Reload config automatically when the config file changes on disk
+  -v, --version           Print version and exit
+  -h, --help              Help
+
+Query subcommand flags:
+      --since duration    Only include events newer than this (e.g. 5m, 1h, 2h30m)
+      --panel string      Filter by panel name
+      --type string       Filter by event type (events subcommand only)
+      --limit int         Maximum rows to return (default 50)
+      --json              Output raw JSON instead of the formatted table
 ```
 
 ### `--init`
 
-Writes a commented example config to `./auphanim.json.example` demonstrating all three watcher types. Copy it to `auphanim.json` and fill in your values.
+Writes an example config to `./auphanim.json.example` demonstrating all watcher types. Copy it to `auphanim.json` and fill in your values.
 
 ```bash
 ./auphanim --init
 cp auphanim.json.example auphanim.json
 $EDITOR auphanim.json
 ```
+
+### `--watch`
+
+Polls the config file for changes once per second. When a change is detected, all watchers are stopped gracefully and the new config is loaded and applied without restarting the TUI. Useful when iterating on which watchers or tables to include.
+
+```bash
+./auphanim --watch
+# or with an explicit config file:
+./auphanim -c /etc/auphanim.json --watch
+```
+
+If the reloaded config contains a syntax error or references an unknown watcher type, the error is shown in the footer and the existing watchers keep running.
 
 ---
 
@@ -423,7 +595,7 @@ cd auphanim
 go mod download
 
 # Run unit tests (no external services required)
-go test ./internal/config/... ./internal/watcher/filesystem/...
+go test ./internal/config/... ./internal/store/... ./internal/api/... ./internal/watcher/filesystem/... ./internal/watcher/logfile/...
 
 # Build
 go build -o auphanim .

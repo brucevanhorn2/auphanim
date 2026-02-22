@@ -27,7 +27,7 @@ var envVarRe = regexp.MustCompile(`\$\{([A-Z0-9_]+)\}`)
 // when path is empty), performs ${VAR} interpolation, and returns a Config.
 func Load(path string) (*Config, error) {
 	if path == "" {
-		path = findConfigFile()
+		path = FindConfigFile()
 	}
 	if path == "" {
 		return nil, fmt.Errorf("no config file found; create ./auphanim.json or run with --init")
@@ -75,7 +75,10 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-func findConfigFile() string {
+// FindConfigFile returns the first config file found in the default search
+// locations (./auphanim.json then ~/.config/auphanim/config.json), or "" if
+// neither exists.
+func FindConfigFile() string {
 	if _, err := os.Stat("./auphanim.json"); err == nil {
 		return "./auphanim.json"
 	}

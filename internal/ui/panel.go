@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -24,13 +25,15 @@ type MetricSample struct {
 // PanelModel is the sub-model for a single watcher panel.
 // It holds a ring-buffer of the most recent events.
 type PanelModel struct {
-	watcherName string
-	watcherType string
-	maxEvents   int
-	evts        []events.WatchEvent // ring buffer
-	lastEvt     events.WatchEvent   // copy of most recent event
-	hasLast     bool
-	metrics     []MetricSample // history for sparklines (sysmetrics type only)
+	watcherName    string
+	watcherType    string
+	maxEvents      int
+	evts           []events.WatchEvent // ring buffer
+	lastEvt        events.WatchEvent   // copy of most recent event
+	hasLast        bool
+	metrics        []MetricSample // history for sparklines (sysmetrics type only)
+	scrollOffset   int            // lines scrolled up from the bottom; 0 = follow latest
+	lastActivityAt time.Time      // when the most recent event arrived
 }
 
 func newPanelModel(w watcher.Watcher, maxEvents int) *PanelModel {
@@ -53,6 +56,7 @@ func (p *PanelModel) AddEvent(e events.WatchEvent) {
 	p.evts = append(p.evts, e)
 	p.lastEvt = e
 	p.hasLast = true
+	p.lastActivityAt = time.Now()
 
 	// For sysmetrics panels, also maintain the metrics history for sparklines.
 	if e.Type == events.EventMetric {
@@ -80,17 +84,59 @@ func (p *PanelModel) LastEvent() *events.WatchEvent {
 	return &p.lastEvt
 }
 
-// Clear empties the event buffer.
+// Clear empties the event buffer and resets scroll position.
 func (p *PanelModel) Clear() {
 	p.evts = p.evts[:0]
 	p.metrics = p.metrics[:0]
 	p.hasLast = false
+	p.scrollOffset = 0
+}
+
+// filteredEvents returns p.evts filtered by the given substring (case-insensitive).
+// An empty filter returns all events.
+func (p *PanelModel) filteredEvents(filter string) []events.WatchEvent {
+	if filter == "" {
+		return p.evts
+	}
+	lower := strings.ToLower(filter)
+	var out []events.WatchEvent
+	for _, e := range p.evts {
+		if strings.Contains(strings.ToLower(e.Summary), lower) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// ScrollUp scrolls the panel toward older events (increase offset).
+func (p *PanelModel) ScrollUp(filter string) {
+	filtered := p.filteredEvents(filter)
+	max := len(filtered) - 1
+	if max < 0 {
+		return
+	}
+	if p.scrollOffset < max {
+		p.scrollOffset++
+	}
+}
+
+// ScrollDown scrolls toward newer events (decrease offset); reaches 0 = follow.
+func (p *PanelModel) ScrollDown() {
+	if p.scrollOffset > 0 {
+		p.scrollOffset--
+	}
+}
+
+// ScrollReset returns to follow-latest mode.
+func (p *PanelModel) ScrollReset() {
+	p.scrollOffset = 0
 }
 
 // View renders the panel into a string of exactly width×height characters.
 // focused controls whether the border is highlighted.
 // status is the current watcher.Status (queried from the live watcher).
-func (p *PanelModel) View(width, height int, focused bool, status watcher.Status) string {
+// filter is the global filter substring (empty = show all).
+func (p *PanelModel) View(width, height int, focused bool, status watcher.Status, filter string) string {
 	// Inner dimensions (subtract border: 1 char each side)
 	contentW := width - 2
 	contentH := height - 2
@@ -105,7 +151,7 @@ func (p *PanelModel) View(width, height int, focused bool, status watcher.Status
 	if p.watcherType == "sysmetrics" {
 		content = p.metricsView(contentW, contentH, status)
 	} else {
-		content = p.eventListView(contentW, contentH, status)
+		content = p.eventListView(contentW, contentH, status, filter)
 	}
 
 	borderStyle := styleBorderNormal
@@ -116,11 +162,22 @@ func (p *PanelModel) View(width, height int, focused bool, status watcher.Status
 }
 
 // eventListView renders the standard event-log view used by all non-metrics panels.
-func (p *PanelModel) eventListView(contentW, contentH int, status watcher.Status) string {
+func (p *PanelModel) eventListView(contentW, contentH int, status watcher.Status, filter string) string {
 	// --- Title line ---
 	dot := statusDot(status)
 	typeLabel := watcherTypeLabel(p.watcherType)
-	title := stylePanelTitle.Render(fmt.Sprintf(" %s  %s: %s ", dot, typeLabel, p.watcherName))
+
+	// Build title decorations for scroll / filter state.
+	extra := ""
+	filtered := p.filteredEvents(filter)
+	if filter != "" {
+		extra += fmt.Sprintf(" [%d/%d]", len(filtered), len(p.evts))
+	}
+	if p.scrollOffset > 0 {
+		extra += fmt.Sprintf(" ↑%d", p.scrollOffset)
+	}
+
+	title := stylePanelTitle.Render(fmt.Sprintf(" %s  %s: %s%s ", dot, typeLabel, p.watcherName, extra))
 	if lipgloss.Width(title) > contentW {
 		title = title[:contentW]
 	}
@@ -131,11 +188,19 @@ func (p *PanelModel) eventListView(contentW, contentH int, status watcher.Status
 		eventRows = 0
 	}
 
-	// Show the most recent events (newest at bottom).
-	evtsToShow := p.evts
-	if len(evtsToShow) > eventRows {
-		evtsToShow = evtsToShow[len(evtsToShow)-eventRows:]
+	// Apply scroll offset: end is the exclusive upper bound into filtered.
+	end := len(filtered)
+	if p.scrollOffset > 0 {
+		end = len(filtered) - p.scrollOffset
+		if end < 0 {
+			end = 0
+		}
 	}
+	start := end - eventRows
+	if start < 0 {
+		start = 0
+	}
+	evtsToShow := filtered[start:end]
 
 	lines := make([]string, 0, contentH)
 	lines = append(lines, title)
@@ -410,6 +475,10 @@ func watcherTypeLabel(t string) string {
 		return "Kafka"
 	case "filesystem":
 		return "FS"
+	case "logfile":
+		return "Log"
+	case "redis":
+		return "Redis"
 	case "sysmetrics":
 		return "Sys"
 	default:
