@@ -12,6 +12,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"auphanim/internal/config"
+	"auphanim/internal/events"
+	"auphanim/internal/store"
 	"auphanim/internal/ui"
 	"auphanim/internal/watcher"
 
@@ -36,6 +38,7 @@ func main() {
 
 var (
 	cfgFile   string
+	dbFile    string
 	initFlag  bool
 	watchFlag bool
 )
@@ -57,6 +60,8 @@ func init() {
 		"write auphanim.json.example to the current directory and exit")
 	rootCmd.Flags().BoolVarP(&watchFlag, "watch", "w", false,
 		"reload config automatically when the config file changes on disk")
+	rootCmd.Flags().StringVar(&dbFile, "db", "auphanim.db",
+		`SQLite database file for event persistence (use ":memory:" for in-session only)`)
 }
 
 func run(cmd *cobra.Command, args []string) error {
@@ -72,6 +77,13 @@ func run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no watchers configured in %s", cfgFile)
 	}
 
+	// Open the event store.
+	st, err := store.Open(dbFile)
+	if err != nil {
+		return fmt.Errorf("store: %w", err)
+	}
+	defer st.Close()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -83,17 +95,17 @@ func run(cmd *cobra.Command, args []string) error {
 		cancel()
 	}()
 
-	// Build watchers from config.
+	// Build and start watchers, wrapping each in a tapWatcher that persists
+	// every event to the store before forwarding it to the TUI.
 	watchers := make([]watcher.Watcher, 0, len(cfg.Watchers))
 	for _, wc := range cfg.Watchers {
 		w, err := watcher.Create(wc.Type, wc.Name, wc.Config)
 		if err != nil {
 			return fmt.Errorf("watcher %q: %w", wc.Name, err)
 		}
-		watchers = append(watchers, w)
+		watchers = append(watchers, newTapWatcher(w, st))
 	}
 
-	// Start all watchers before launching the TUI.
 	for _, w := range watchers {
 		if err := w.Start(ctx); err != nil {
 			return fmt.Errorf("starting watcher %q: %w", w.Name(), err)
@@ -115,7 +127,6 @@ func run(cmd *cobra.Command, args []string) error {
 	model := ui.NewAppModel(ctx, resolvedCfgFile, watchers)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
-	// If --watch is set, poll the config file for changes and notify the TUI.
 	if watchFlag && resolvedCfgFile != "" {
 		go watchConfigFile(ctx, p, resolvedCfgFile)
 	}
@@ -127,8 +138,55 @@ func run(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// watchConfigFile polls path every second and sends ConfigChangedMsg to p
-// whenever the file's modification time changes.
+// ── tapWatcher ────────────────────────────────────────────────────────────────
+
+// tapWatcher wraps a watcher.Watcher and writes every event to the store
+// before forwarding it on its own channel. It satisfies watcher.Watcher so
+// the TUI requires no changes.
+type tapWatcher struct {
+	inner watcher.Watcher
+	st    *store.Store
+	out   chan events.WatchEvent
+}
+
+func newTapWatcher(w watcher.Watcher, st *store.Store) *tapWatcher {
+	return &tapWatcher{
+		inner: w,
+		st:    st,
+		out:   make(chan events.WatchEvent, 64),
+	}
+}
+
+func (t *tapWatcher) Name() string           { return t.inner.Name() }
+func (t *tapWatcher) Type() string           { return t.inner.Type() }
+func (t *tapWatcher) Status() watcher.Status { return t.inner.Status() }
+func (t *tapWatcher) Events() <-chan events.WatchEvent { return t.out }
+
+func (t *tapWatcher) Start(ctx context.Context) error {
+	if err := t.inner.Start(ctx); err != nil {
+		return err
+	}
+	go t.pump()
+	return nil
+}
+
+func (t *tapWatcher) Stop() {
+	t.inner.Stop()
+}
+
+// pump reads from the inner watcher's channel, persists each event, then
+// forwards it. It closes t.out when the inner channel closes.
+func (t *tapWatcher) pump() {
+	defer close(t.out)
+	for e := range t.inner.Events() {
+		// Best-effort store write; never block the event pipeline on a DB error.
+		_ = t.st.Insert(e)
+		t.out <- e
+	}
+}
+
+// ── watchConfigFile ───────────────────────────────────────────────────────────
+
 func watchConfigFile(ctx context.Context, p *tea.Program, path string) {
 	var lastMtime time.Time
 	if info, err := os.Stat(path); err == nil {
@@ -153,6 +211,8 @@ func watchConfigFile(ctx context.Context, p *tea.Program, path string) {
 		}
 	}
 }
+
+// ── Example config ────────────────────────────────────────────────────────────
 
 const exampleConfig = `{
   "watchers": [

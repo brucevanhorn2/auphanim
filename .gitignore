@@ -1,9 +1,16 @@
 # Build output
 auphanim
+demo/gen/gen
 
 # Config (may contain secrets)
 auphanim.json
 !demo/auphanim.json
+
+# SQLite databases and exports
+*.db
+*.db-shm
+*.db-wal
+auphanim_export_*.json
 
 # Test cache and coverage
 *.test
