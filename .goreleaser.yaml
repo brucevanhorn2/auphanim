@@ -25,11 +25,11 @@ builds:
       - -s -w -X main.version={{.Version}}
 
 archives:
-  - format: tar.gz
+  - formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
     files:
       - README.md
       - auphanim.json.example
@@ -46,16 +46,13 @@ changelog:
       - "^chore:"
       - "^ci:"
 
-brews:
+homebrew_casks:
   - name: auphanim
+    binaries:
+      - auphanim
     repository:
       owner: brucevanhorn2
       name: homebrew-tap
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
     homepage: "https://github.com/brucevanhorn2/auphanim"
     description: "TUI developer tool for watching system-wide changes while testing full-stack software"
-    license: "MIT"
-    install: |
-      bin.install "auphanim"
-    test: |
-      system "#{bin}/auphanim", "--version"
