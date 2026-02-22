@@ -25,6 +25,12 @@
       "recursive": true,
       "patterns": ["*.pdf", "*.jpg"],
       "max_events": 100
+    },
+    {
+      "name": "System",
+      "type": "sysmetrics",
+      "poll_interval_s": 2,
+      "max_events": 100
     }
   ]
 }

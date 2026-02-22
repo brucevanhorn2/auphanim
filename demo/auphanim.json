@@ -1,6 +1,12 @@
 {
   "watchers": [
     {
+      "name": "System",
+      "type": "sysmetrics",
+      "poll_interval_s": 2,
+      "max_events": 50
+    },
+    {
       "name": "Demo DB",
       "type": "postgres",
       "dsn": "postgres://demo:demo@localhost:5432/demo",

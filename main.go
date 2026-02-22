@@ -19,6 +19,7 @@ import (
 	_ "auphanim/internal/watcher/filesystem"
 	_ "auphanim/internal/watcher/kafka"
 	_ "auphanim/internal/watcher/postgres"
+	_ "auphanim/internal/watcher/sysmetrics"
 )
 
 var version = "0.1.0"
@@ -110,6 +111,12 @@ func run(cmd *cobra.Command, args []string) error {
 
 const exampleConfig = `{
   "watchers": [
+    {
+      "name": "System",
+      "type": "sysmetrics",
+      "poll_interval_s": 2,
+      "max_events": 100
+    },
     {
       "name": "Main DB",
       "type": "postgres",
