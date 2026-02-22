@@ -21,6 +21,7 @@ Named after the [Ophanim](https://en.wikipedia.org/wiki/Ophanim), the many-eyed 
   - [Filesystem watcher](#filesystem-watcher)
   - [Redis watcher](#redis-watcher)
   - [System metrics watcher](#system-metrics-watcher)
+  - [Log file watcher](#log-file-watcher)
 - [Key bindings](#key-bindings)
 - [CLI reference](#cli-reference)
 - [Contributing](#contributing)
@@ -371,17 +372,60 @@ No external services or configuration beyond `poll_interval_s` are required. The
 
 ---
 
+### Log file watcher
+
+**Type string:** `"logfile"`
+
+Tails one or more log files and emits one event per new line — like `tail -f` but integrated into the auphanim panel. Uses [fsnotify](https://github.com/fsnotify/fsnotify) to detect writes without polling. Handles log rotation by comparing inodes, and detects truncation (e.g. `logrotate` with `copytruncate`).
+
+**Silent start:** Lines present in the file before auphanim starts are not emitted. Only new lines written after startup appear.
+
+```json
+{
+  "name": "App Logs",
+  "type": "logfile",
+  "paths": ["${LOG_PATH}", "/var/log/nginx/error.log"],
+  "patterns": ["WARN", "ERROR"],
+  "error_patterns": ["ERROR", "FATAL", "PANIC", "EXCEPTION"],
+  "max_events": 200
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `paths` | array of strings | **required** | One or more log files to tail. Each file is watched independently. |
+| `patterns` | array of strings | `[]` (all lines) | If non-empty, only lines containing at least one of these substrings (case-insensitive) are emitted. |
+| `error_patterns` | array of strings | `["ERROR","FATAL","PANIC","EXCEPTION","panic:"]` | Lines matching any of these substrings are classified as `EventError` (shown in red) rather than `EventMessage`. |
+| `max_events` | integer | `100` | Maximum events to keep in the panel ring buffer. |
+
+Events reported: `MESSAGE` (normal line), `ERROR` (line matches an error pattern).
+
+Summary format: `filename.log: <line content>` — the base filename is prepended so you can tell which file a line came from when watching multiple files.
+
+---
 
 ## Key bindings
 
 | Key | Action |
 |---|---|
-| `Tab` / `j` / `↓` | Move focus to the next panel |
-| `Shift+Tab` / `k` / `↑` | Move focus to the previous panel |
+| `Tab` / `Shift+Tab` | Move focus to the next / previous panel |
+| `j` / `↓` | Scroll focused panel toward newer events |
+| `k` / `↑` | Scroll focused panel toward older events |
+| `g` | Jump to latest (stop scrolling, follow new events) |
+| `/` | Enter filter mode — type to filter events in all panels |
+| `Esc` | Clear filter (in normal mode); exit filter input (in filter mode) |
+| `+` | Increase height of focused panel |
+| `-` | Decrease height of focused panel |
+| `=` | Reset all panel heights to equal |
 | `Enter` | Open detail overlay for the last event in the focused panel |
 | `Esc` / `q` / `Enter` | Close the detail overlay |
+| `s` / `S` | Save all current events to `auphanim_export_<timestamp>.json` |
 | `c` / `C` | Clear all event buffers |
 | `q` / `Ctrl+C` | Quit |
+
+**Filter mode:** Press `/` to start filtering. The footer shows `Filter: <text>▎`. Events across all panels are filtered to lines whose summary contains the text (case-insensitive). Press `Enter` to confirm or `Esc` to clear and exit. The panel title shows `[matching/total]` when a filter is active.
+
+**Scroll indicator:** When a panel is scrolled up (not following latest), its title shows `↑N` where N is how many lines back from the most recent event.
 
 The detail overlay shows the full structured data for the most recent event, with syntax-highlighted JSON.
 
@@ -397,19 +441,32 @@ Flags:
   -c, --config string   Config file path
                         (default search: ./auphanim.json, ~/.config/auphanim/config.json)
       --init            Write auphanim.json.example to the current directory and exit
+  -w, --watch           Reload config automatically when the config file changes on disk
   -v, --version         Print version and exit
   -h, --help            Help
 ```
 
 ### `--init`
 
-Writes a commented example config to `./auphanim.json.example` demonstrating all three watcher types. Copy it to `auphanim.json` and fill in your values.
+Writes an example config to `./auphanim.json.example` demonstrating all watcher types. Copy it to `auphanim.json` and fill in your values.
 
 ```bash
 ./auphanim --init
 cp auphanim.json.example auphanim.json
 $EDITOR auphanim.json
 ```
+
+### `--watch`
+
+Polls the config file for changes once per second. When a change is detected, all watchers are stopped gracefully and the new config is loaded and applied without restarting the TUI. Useful when iterating on which watchers or tables to include.
+
+```bash
+./auphanim --watch
+# or with an explicit config file:
+./auphanim -c /etc/auphanim.json --watch
+```
+
+If the reloaded config contains a syntax error or references an unknown watcher type, the error is shown in the footer and the existing watchers keep running.
 
 ---
 
@@ -423,7 +480,7 @@ cd auphanim
 go mod download
 
 # Run unit tests (no external services required)
-go test ./internal/config/... ./internal/watcher/filesystem/...
+go test ./internal/config/... ./internal/watcher/filesystem/... ./internal/watcher/logfile/...
 
 # Build
 go build -o auphanim .
