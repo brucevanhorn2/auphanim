@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
+	"auphanim/internal/api"
 	"auphanim/internal/config"
 	"auphanim/internal/events"
 	"auphanim/internal/store"
@@ -37,8 +38,9 @@ func main() {
 }
 
 var (
-	cfgFile   string
-	dbFile    string
+	cfgFile  string
+	dbFile   string
+	apiPort  int
 	initFlag  bool
 	watchFlag bool
 )
@@ -62,6 +64,8 @@ func init() {
 		"reload config automatically when the config file changes on disk")
 	rootCmd.Flags().StringVar(&dbFile, "db", "auphanim.db",
 		`SQLite database file for event persistence (use ":memory:" for in-session only)`)
+	rootCmd.Flags().IntVar(&apiPort, "api-port", 7391,
+		"port for the local HTTP query API (0 = disabled)")
 }
 
 func run(cmd *cobra.Command, args []string) error {
@@ -116,6 +120,16 @@ func run(cmd *cobra.Command, args []string) error {
 			w.Stop()
 		}
 	}()
+
+	// Start the HTTP query API if a port is configured.
+	if apiPort > 0 {
+		srv := api.NewServer(st, apiPort)
+		if err := srv.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: API server on port %d unavailable: %v\n", apiPort, err)
+		} else {
+			defer srv.Stop()
+		}
+	}
 
 	// Resolve cfgFile so the watch goroutine has an absolute path to stat.
 	resolvedCfgFile := cfgFile
