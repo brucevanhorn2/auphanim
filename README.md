@@ -4,32 +4,7 @@ A TUI developer tool for watching system-wide changes while testing full-stack s
 
 Named after the [Ophanim](https://en.wikipedia.org/wiki/Ophanim), the many-eyed angels of Ezekiel's vision.
 
-```
-┌─────────────────── AUPHANIM — Watching 4 sources ───────────────────────┐
-│                                                                          │
-│ ╭── DB: Main DB ●Connected ──────────────────────────────────────────╮  │
-│ │ 14:23:01  INSERT    users       +1 inserted                        │  │
-│ │ 14:23:01  INSERT    orders      +1 inserted                        │  │
-│ │ 14:23:03  UPDATE    orders      +1 updated                         │  │
-│ ╰────────────────────────────────────────────────────────────────────╯  │
-│                                                                          │
-│ ╭── Kafka: Events ●Connected ────────────────────────────────────────╮  │
-│ │ 14:23:01  MESSAGE   order.created  p=0  off=1042  {"orderId":7...  │  │
-│ ╰────────────────────────────────────────────────────────────────────╯  │
-│                                                                          │
-│ ╭── FS: Uploads ●Connected ──────────────────────────────────────────╮  │
-│ │ 14:23:01  CREATED   /var/uploads/user42/receipt.pdf                │  │
-│ ╰────────────────────────────────────────────────────────────────────╯  │
-│                                                                          │
-│ ╭── redis: Cache ●Connected ─────────────────────────────────────────╮  │
-│ │ 14:23:02  CREATED   session:4821   type=string  ttl=none           │  │
-│ │ 14:23:04  CREATED   token:7093     type=string  ttl=30s            │  │
-│ │ 14:23:06  REMOVED   session:4821                                   │  │
-│ ╰────────────────────────────────────────────────────────────────────╯  │
-│                                                                          │
-│  TAB/j/k: focus   ENTER: event detail   C: clear   Q: quit              │
-└──────────────────────────────────────────────────────────────────────────┘
-```
+![Auphanim screenshot](assets/screenshot.png)
 
 ---
 
@@ -45,6 +20,7 @@ Named after the [Ophanim](https://en.wikipedia.org/wiki/Ophanim), the many-eyed 
   - [Kafka watcher](#kafka-watcher)
   - [Filesystem watcher](#filesystem-watcher)
   - [Redis watcher](#redis-watcher)
+  - [System metrics watcher](#system-metrics-watcher)
 - [Key bindings](#key-bindings)
 - [CLI reference](#cli-reference)
 - [Contributing](#contributing)
@@ -355,6 +331,46 @@ Events reported: `CREATED` (new key detected), `REMOVED` (key deleted or expired
 > **TTL expiry:** When a key expires between two polls, SCAN simply won't return it — auphanim correctly emits `REMOVED` with no special handling needed.
 
 ---
+
+### System metrics watcher
+
+**Type string:** `"sysmetrics"`
+
+Polls CPU usage, memory consumption, and network I/O rates from the local machine and displays them as bar graphs with sparkline history — similar to bpytop or btop.
+
+```json
+{
+  "name": "System",
+  "type": "sysmetrics",
+  "poll_interval_s": 2,
+  "max_events": 100
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `poll_interval_s` | integer | `2` | How often to sample metrics, in seconds. |
+| `max_events` | integer | `100` | Maximum samples to keep in the ring buffer (also caps sparkline history at 60). |
+
+The panel renders four rows, each with a proportional bar graph (green → yellow → red as load increases) and a sparkline of recent history:
+
+```
+ CPU   ████████████░░░░░░░░░░░░░░░░  34.0%  ▁▂▃▄▃▅▄▆▇█
+ MEM   ███████░░░░░░░░░░░░░░░░░░░░░  38.5%  6.2/16.0GB
+ ↓ NET ░░░░░░░░░░░░░░░░░░░░░░░░░░░░  1.2 KB/s
+ ↑ NET ░░░░░░░░░░░░░░░░░░░░░░░░░░░░  0.4 KB/s
+```
+
+- **CPU** — aggregate CPU utilization across all cores (`/proc/stat` on Linux).
+- **MEM** — used vs. total physical RAM in GB.
+- **↓ NET / ↑ NET** — receive/transmit bytes per second aggregated across all network interfaces. The bar scales relative to the peak observed since startup.
+
+Pressing `Enter` on a focused sysmetrics panel opens the standard detail overlay showing the full JSON payload (cpu_pct, mem_pct, mem_used_gb, mem_total_gb, net_recv_bps, net_send_bps).
+
+No external services or configuration beyond `poll_interval_s` are required. The watcher works on Linux and macOS.
+
+---
+
 
 ## Key bindings
 
