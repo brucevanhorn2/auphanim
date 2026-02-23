@@ -62,7 +62,7 @@ func init() {
 		"write auphanim.json.example to the current directory and exit")
 	rootCmd.Flags().BoolVarP(&watchFlag, "watch", "w", false,
 		"reload config automatically when the config file changes on disk")
-	rootCmd.Flags().StringVar(&dbFile, "db", "auphanim.db",
+	rootCmd.PersistentFlags().StringVar(&dbFile, "db", "auphanim.db",
 		`SQLite database file for event persistence (use ":memory:" for in-session only)`)
 	rootCmd.Flags().IntVar(&apiPort, "api-port", 7391,
 		"port for the local HTTP query API (0 = disabled)")
