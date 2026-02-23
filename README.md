@@ -26,6 +26,7 @@ Named after the [Ophanim](https://en.wikipedia.org/wiki/Ophanim), the many-eyed 
 - [Querying events](#querying-events)
   - [HTTP API](#http-api)
   - [query subcommand](#query-subcommand)
+  - [MCP server (AI agents)](#mcp-server-ai-agents)
 - [CLI reference](#cli-reference)
 - [Contributing](#contributing)
   - [Adding a new watcher type](#adding-a-new-watcher-type)
@@ -535,18 +536,82 @@ auphanim query errors --since 5m --json | jq '.'
 
 ---
 
+### MCP server (AI agents)
+
+`auphanim mcp` starts a [Model Context Protocol](https://modelcontextprotocol.io) server on **stdio**. This lets an AI coding agent — Claude Code, GitHub Copilot, Cursor, or any MCP-aware tool — query the event store interactively during a development session, without you having to copy-paste output or leave the chat.
+
+**Available tools:**
+
+| Tool | Description |
+|---|---|
+| `get_summary` | Per-panel event and error counts. Optional `since` argument. |
+| `get_events` | List events with optional `panel`, `type`, `since`, `limit` filters. |
+| `get_errors` | Shorthand for `get_events` filtered to `ERROR` type. |
+
+#### Configure Claude Code
+
+Add to your project's `.claude/settings.json` (or `~/.claude.json` for a global entry):
+
+```json
+{
+  "mcpServers": {
+    "auphanim": {
+      "type": "stdio",
+      "command": "auphanim",
+      "args": ["mcp", "--db", "/path/to/auphanim.db"]
+    }
+  }
+}
+```
+
+Replace `/path/to/auphanim.db` with the actual path, or omit `--db` entirely to use `auphanim.db` in the current directory.
+
+#### Usage during a session
+
+Start auphanim in one terminal:
+
+```bash
+./auphanim --config auphanim.json
+```
+
+Then in Claude Code (or another MCP client), just ask natural-language questions:
+
+> "Did any errors occur in the last 5 minutes?"
+
+> "What database changes happened while I was running the test suite?"
+
+> "Show me all events from the App Logs panel since my last deploy."
+
+The agent calls `get_summary` or `get_events` and returns formatted results directly in the conversation.
+
+#### Manual test (verify the MCP server works)
+
+```bash
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}' \
+  | auphanim mcp --db auphanim.db
+```
+
+You should receive a JSON response with `protocolVersion` and `serverInfo`.
+
+---
+
 ## CLI reference
 
 ```
 Usage:
   auphanim [flags]
   auphanim query (summary|events|errors) [flags]
+  auphanim mcp [flags]
 
-Flags:
-  -c, --config string     Config file path
-                          (default search: ./auphanim.json, ~/.config/auphanim/config.json)
+Global flags (available to all subcommands):
       --db string         SQLite database file (default "auphanim.db"; use ":memory:" for
                           in-session-only storage that is discarded on exit)
+      --retain-days int   Delete events older than this many days on startup and hourly
+                          (default 7; 0 = keep forever)
+
+Root command flags:
+  -c, --config string     Config file path
+                          (default search: ./auphanim.json, ~/.config/auphanim/config.json)
       --api-port int      Port for the local HTTP query API (default 7391; 0 = disabled)
       --init              Write auphanim.json.example to the current directory and exit
   -w, --watch             Reload config automatically when the config file changes on disk
@@ -595,7 +660,7 @@ cd auphanim
 go mod download
 
 # Run unit tests (no external services required)
-go test ./internal/config/... ./internal/store/... ./internal/api/... ./internal/watcher/filesystem/... ./internal/watcher/logfile/...
+go test ./internal/config/... ./internal/store/... ./internal/api/... ./internal/mcp/... ./internal/watcher/filesystem/... ./internal/watcher/logfile/...
 
 # Build
 go build -o auphanim .

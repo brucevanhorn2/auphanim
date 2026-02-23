@@ -28,7 +28,7 @@ import (
 	_ "auphanim/internal/watcher/sysmetrics"
 )
 
-var version = "0.2.0"
+var version = "0.3.0"
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
@@ -38,11 +38,12 @@ func main() {
 }
 
 var (
-	cfgFile  string
-	dbFile   string
-	apiPort  int
-	initFlag  bool
-	watchFlag bool
+	cfgFile     string
+	dbFile      string
+	apiPort     int
+	initFlag    bool
+	watchFlag   bool
+	retainDays  int
 )
 
 var rootCmd = &cobra.Command{
@@ -62,8 +63,10 @@ func init() {
 		"write auphanim.json.example to the current directory and exit")
 	rootCmd.Flags().BoolVarP(&watchFlag, "watch", "w", false,
 		"reload config automatically when the config file changes on disk")
-	rootCmd.Flags().StringVar(&dbFile, "db", "auphanim.db",
+	rootCmd.PersistentFlags().StringVar(&dbFile, "db", "auphanim.db",
 		`SQLite database file for event persistence (use ":memory:" for in-session only)`)
+	rootCmd.PersistentFlags().IntVar(&retainDays, "retain-days", 7,
+		"delete events older than this many days on startup and hourly (0 = keep forever)")
 	rootCmd.Flags().IntVar(&apiPort, "api-port", 7391,
 		"port for the local HTTP query API (0 = disabled)")
 }
@@ -90,6 +93,11 @@ func run(cmd *cobra.Command, args []string) error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Start the store pruning loop (no-op when --retain-days=0 or db is :memory:).
+	if retainDays > 0 && dbFile != ":memory:" {
+		go pruneLoop(ctx, st, time.Duration(retainDays)*24*time.Hour)
+	}
 
 	// Graceful shutdown on SIGINT/SIGTERM.
 	sigCh := make(chan os.Signal, 1)
@@ -196,6 +204,35 @@ func (t *tapWatcher) pump() {
 		// Best-effort store write; never block the event pipeline on a DB error.
 		_ = t.st.Insert(e)
 		t.out <- e
+	}
+}
+
+// ── pruneLoop ─────────────────────────────────────────────────────────────────
+
+// pruneLoop deletes events older than age immediately at startup, then once
+// per hour. Errors are logged to stderr but never fatal — a pruning failure
+// should not bring down the TUI.
+func pruneLoop(ctx context.Context, st *store.Store, age time.Duration) {
+	prune := func() {
+		n, err := st.Prune(age)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "store prune: %v\n", err)
+		} else if n > 0 {
+			fmt.Fprintf(os.Stderr, "store: pruned %d event(s) older than %v\n", n, age)
+		}
+	}
+
+	prune() // run immediately so startup cleans up stale data
+
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			prune()
+		}
 	}
 }
 
