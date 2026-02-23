@@ -606,6 +606,8 @@ Usage:
 Global flags (available to all subcommands):
       --db string         SQLite database file (default "auphanim.db"; use ":memory:" for
                           in-session-only storage that is discarded on exit)
+      --retain-days int   Delete events older than this many days on startup and hourly
+                          (default 7; 0 = keep forever)
 
 Root command flags:
   -c, --config string     Config file path
