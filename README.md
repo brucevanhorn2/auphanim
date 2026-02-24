@@ -217,6 +217,15 @@ Polls `pg_stat_user_tables` every `poll_interval_s` seconds and reports the delt
 
 Use this mode when you cannot or do not want to modify the database schema.
 
+> **⚠️ About `n_tup_ins`, `n_tup_upd`, `n_tup_del` counters:**
+> 
+> These PostgreSQL counters in `pg_stat_user_tables` measure **tuple operations at the storage engine level**, not logical row inserts. This means:
+> - A single INSERT statement may increment the counter by more than 1 if the table has triggers, check constraints, or other operations that cause row rewrites
+> - Table scans, HOT (Heap Only Tuple) updates, and prepared statement re-planning can sometimes increment these counters due to how PostgreSQL's query planner works
+> - If you see counts that seem higher than expected, the application is likely performing more database operations than you think (e.g., validation queries, constraint checks, or multiple statements per logical operation)
+> 
+> **If counts seem wrong:** Switch to `mode: "full_detail"` to see the actual row data and verify what operations are happening. This will help you understand whether auphanim is correctly reporting your application's true database behavior.
+
 #### Mode: `full_detail`
 
 Installs an `AFTER INSERT OR UPDATE OR DELETE` trigger on each watched table. The trigger calls `pg_notify('auphanim_changes', <json_payload>)` with the full row data. Auphanim listens on that channel via a dedicated connection and surfaces the actual `NEW`/`OLD` row values in the detail overlay.
@@ -399,12 +408,20 @@ Tails one or more log files and emits one event per new line — like `tail -f` 
 |---|---|---|---|
 | `paths` | array of strings | **required** | One or more log files to tail. Each file is watched independently. |
 | `patterns` | array of strings | `[]` (all lines) | If non-empty, only lines containing at least one of these substrings (case-insensitive) are emitted. |
-| `error_patterns` | array of strings | `["ERROR","FATAL","PANIC","EXCEPTION","panic:"]` | Lines matching any of these substrings are classified as `EventError` (shown in red) rather than `EventMessage`. |
+| `error_patterns` | array of strings | `["ERROR","FATAL","PANIC","EXCEPTION","panic:"]` | Lines matching any of these substrings are classified as `EventError` (shown in red) rather than `EventMessage`. Should only contain **actual error keywords**, not log levels (see note below). |
 | `max_events` | integer | `100` | Maximum events to keep in the panel ring buffer. |
 
 Events reported: `MESSAGE` (normal line), `ERROR` (line matches an error pattern).
 
 Summary format: `filename.log: <line content>` — the base filename is prepended so you can tell which file a line came from when watching multiple files.
+
+> **⚠️ Common mistake with `error_patterns`:** Don't include generic log level keywords like `"INFO"`, `"DEBUG"`, `"WARN"` (or lowercase variants). These appear in every log line and will cause the entire panel to show as red errors.
+>
+> ❌ **Bad:** `"error_patterns": ["ERROR", "WARN", "INFO", "debug"]` — every line gets classified as ERROR
+>
+> ✅ **Good:** `"error_patterns": ["ERROR", "FATAL", "PANIC"]` — only actual errors shown in red
+>
+> If you want warnings to stand out, add `"WARN"` to `error_patterns`: `"error_patterns": ["ERROR", "FATAL", "PANIC", "WARN"]`. Use `"patterns"` (not `error_patterns`) to **filter** which lines to display at all.
 
 ---
 

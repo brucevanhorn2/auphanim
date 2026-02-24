@@ -205,8 +205,10 @@ func (p *PanelModel) eventListView(contentW, contentH int, status watcher.Status
 	lines := make([]string, 0, contentH)
 	lines = append(lines, title)
 
-	for _, e := range evtsToShow {
-		lines = append(lines, renderEventLine(e, contentW))
+	for i, e := range evtsToShow {
+		// Mark the last event (most recent) as selected, since that's what appears in detail overlay.
+		selected := (i == len(evtsToShow)-1) && len(evtsToShow) > 0
+		lines = append(lines, renderEventLine(e, contentW, selected))
 	}
 	// Pad to fill remaining space.
 	for len(lines) < contentH {
@@ -448,7 +450,7 @@ func fmtBps(bps float64) string {
 }
 
 // renderEventLine formats a single event for display in the panel.
-func renderEventLine(e events.WatchEvent, maxWidth int) string {
+func renderEventLine(e events.WatchEvent, maxWidth int, selected bool) string {
 	ts := styleTimestamp.Render(e.Timestamp.Format("15:04:05"))
 	typeStr := eventTypeStyle(e.Type).Width(8).Render(string(e.Type))
 	summary := e.Summary
@@ -462,6 +464,11 @@ func renderEventLine(e events.WatchEvent, maxWidth int) string {
 			summary = summary[:remaining]
 		}
 		line = ts + "  " + typeStr + "  " + summary
+	}
+	
+	if selected {
+		// Apply selection style to entire line by padding to width.
+		line = styleEventSelected.Width(maxWidth).Render(line)
 	}
 	return line
 }

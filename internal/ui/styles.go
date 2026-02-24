@@ -43,6 +43,11 @@ var (
 			Bold(true).
 			Foreground(colorBlue)
 
+	styleEventSelected = lipgloss.NewStyle().
+				Foreground(colorWhite).
+				Background(colorPurple).
+				Bold(true)
+
 	styleTimestamp = lipgloss.NewStyle().
 			Foreground(colorGray)
 
