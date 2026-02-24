@@ -48,13 +48,6 @@ When testing a feature end-to-end you constantly context-switch between terminal
 
 ## Installation
 
-### Homebrew (macOS and Linux)
-
-```bash
-brew tap brucevanhorn2/tap
-brew install auphanim
-```
-
 ### From source
 
 **Prerequisites:** Go 1.22 or later.
