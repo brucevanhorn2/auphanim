@@ -49,6 +49,15 @@
       "paths": ["/tmp/auphanim-demo/app.log"],
       "error_patterns": ["ERROR", "FATAL", "PANIC"],
       "max_events": 100
+    },
+    {
+      "name": "My Repos",
+      "type": "git",
+      "path": "/path/to/your/repos",
+      "poll_interval_s": 60,
+      "alert_files_changed": 50,
+      "alert_branch_age_days": 14,
+      "max_events": 100
     }
   ]
 }
