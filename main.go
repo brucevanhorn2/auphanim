@@ -21,6 +21,7 @@ import (
 	// Blank imports trigger each watcher package's init(), which registers
 	// the factory with the global registry.
 	_ "auphanim/internal/watcher/filesystem"
+	_ "auphanim/internal/watcher/git"
 	_ "auphanim/internal/watcher/kafka"
 	_ "auphanim/internal/watcher/logfile"
 	_ "auphanim/internal/watcher/postgres"
