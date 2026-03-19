@@ -91,6 +91,7 @@ type Config struct {
 type repoState struct {
 	path            string
 	currentBranch   string
+	mainBranch      string // cached at seed time; "main", "master", or ""
 	lastRemoteHead  string // last seen origin/<currentBranch> SHA
 	lastMainHead    string // last seen origin/<main|master> SHA
 	filesWarnIssued bool   // true once we've fired the files-changed warning
@@ -208,9 +209,17 @@ func (w *Watcher) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Poll all repos concurrently so a slow fetch on one repo doesn't
+			// delay inspection of the others.
+			var wg sync.WaitGroup
 			for _, rs := range w.repos {
-				w.poll(ctx, rs)
+				wg.Add(1)
+				go func(rs *repoState) {
+					defer wg.Done()
+					w.poll(ctx, rs)
+				}(rs)
 			}
+			wg.Wait()
 		}
 	}
 }
@@ -226,8 +235,9 @@ func (w *Watcher) fetchAndSeed(ctx context.Context, rs *repoState) {
 	}
 	rs.currentBranch = branch
 	rs.lastRemoteHead, _ = gitOut(ctx, rs.path, "rev-parse", "origin/"+branch)
-	if mb := mainBranch(ctx, rs.path); mb != "" {
-		rs.lastMainHead, _ = gitOut(ctx, rs.path, "rev-parse", "origin/"+mb)
+	rs.mainBranch = mainBranch(ctx, rs.path) // cached; rarely changes
+	if rs.mainBranch != "" {
+		rs.lastMainHead, _ = gitOut(ctx, rs.path, "rev-parse", "origin/"+rs.mainBranch)
 	}
 }
 
@@ -252,8 +262,9 @@ func (w *Watcher) poll(ctx context.Context, rs *repoState) {
 		rs.lastRemoteHead, _ = gitOut(ctx, rs.path, "rev-parse", "origin/"+branch)
 		rs.filesWarnIssued = false
 		rs.ageWarnIssued = false
+	} else {
+		rs.currentBranch = branch
 	}
-	rs.currentBranch = branch
 
 	// ── Remote pushes to the current branch ───────────────────────────────────
 	remoteHead, _ := gitOut(ctx, rs.path, "rev-parse", "origin/"+branch)
@@ -261,7 +272,7 @@ func (w *Watcher) poll(ctx context.Context, rs *repoState) {
 		commits, _ := gitLines(ctx, rs.path, "log",
 			rs.lastRemoteHead+".."+remoteHead, "--oneline", "--no-decorate")
 		w.emit(events.EventMessage,
-			fmt.Sprintf("[%s] %d new commit(s) pushed to %s by someone else",
+			fmt.Sprintf("[%s] %d new commit(s) on %s (remote advanced)",
 				repoLabel, len(commits), branch),
 			map[string]any{
 				"repo":    rs.path,
@@ -275,7 +286,7 @@ func (w *Watcher) poll(ctx context.Context, rs *repoState) {
 	}
 
 	// ── Activity on main/master ───────────────────────────────────────────────
-	mb := mainBranch(ctx, rs.path)
+	mb := rs.mainBranch
 	if mb != "" && branch != mb {
 		mainHead, _ := gitOut(ctx, rs.path, "rev-parse", "origin/"+mb)
 		if mainHead != "" && rs.lastMainHead != "" && mainHead != rs.lastMainHead {
@@ -348,12 +359,15 @@ func (w *Watcher) poll(ctx context.Context, rs *repoState) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// expandPath resolves ~ and cleans the path.
+// expandPath resolves ~ and ~/ prefixes and cleans the path.
 func expandPath(p string) (string, error) {
-	if strings.HasPrefix(p, "~/") {
+	if p == "~" || strings.HasPrefix(p, "~/") {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", err
+		}
+		if p == "~" {
+			return home, nil
 		}
 		p = filepath.Join(home, p[2:])
 	}

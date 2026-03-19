@@ -113,6 +113,20 @@ func TestExpandPath_Absolute(t *testing.T) {
 	}
 }
 
+func TestExpandPath_TildeAlone(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+	got, err := expandPath("~")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != home {
+		t.Fatalf("got %q, want %q", got, home)
+	}
+}
+
 // TestWatcher_MissingPath checks that the watcher shuts down cleanly and
 // emits an error event when the configured path does not exist.
 func TestWatcher_MissingPath(t *testing.T) {

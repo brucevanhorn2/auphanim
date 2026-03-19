@@ -53,7 +53,7 @@
     {
       "name": "My Repos",
       "type": "git",
-      "path": "~/Projects",
+      "path": "/path/to/your/repos",
       "poll_interval_s": 60,
       "alert_files_changed": 50,
       "alert_branch_age_days": 14,
