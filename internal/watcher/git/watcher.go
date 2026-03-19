@@ -385,14 +385,16 @@ func discoverRepos(root string) ([]string, error) {
 }
 
 func isGitRepo(path string) bool {
-	info, err := os.Stat(filepath.Join(path, ".git"))
-	return err == nil && info.IsDir()
+	_, err := os.Stat(filepath.Join(path, ".git"))
+	return err == nil
 }
 
-// gitFetch runs a quiet fetch; errors are intentionally ignored (offline is ok).
+// gitFetch runs a quiet fetch with a 30-second timeout; errors are
+// intentionally ignored (offline / stalled remotes should not block polling).
 func gitFetch(ctx context.Context, dir string) {
-	cmd := exec.CommandContext(ctx, "git", "-C", dir, "fetch", "--quiet", "--no-tags")
-	_ = cmd.Run()
+	fctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	_ = exec.CommandContext(fctx, "git", "-C", dir, "fetch", "--quiet", "--no-tags").Run()
 }
 
 // gitOut runs a git command and returns trimmed stdout, or an error.
